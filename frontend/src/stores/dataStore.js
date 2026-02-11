@@ -188,6 +188,33 @@ export const useDataStore = defineStore('data', {
       this.queryData()
     },
 
+    // Update filter
+    updateFilter(index, filter) {
+      if (index >= 0 && index < this.activeFilters.length) {
+        this.activeFilters[index] = filter
+        this.queryData()
+      }
+    },
+
+    // Get filter options for a column
+    async getFilterOptions(column, limit = 100) {
+      if (!this.activeSource) {
+        return []
+      }
+
+      try {
+        const response = await api.getFilterOptions(
+          this.activeSource.source_id,
+          column,
+          limit
+        )
+        return response.values || []
+      } catch (error) {
+        console.error('Error fetching filter options:', error)
+        return []
+      }
+    },
+
     // Generate chart
     async generateChart(chartConfig) {
       if (!this.activeSource) {

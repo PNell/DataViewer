@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"]
 
     # File Upload Settings
-    MAX_UPLOAD_SIZE: int = 100 * 1024 * 1024  # 100MB
+    MAX_UPLOAD_SIZE: int = 100 * 1024 * 1024  # 100 MB
     UPLOAD_DIR: Path = Path("data")
     ALLOWED_EXTENSIONS: set[str] = {".csv"}
 

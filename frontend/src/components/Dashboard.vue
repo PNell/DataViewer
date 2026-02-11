@@ -6,8 +6,9 @@
       <DatabaseConnect v-if="showDatabaseConnect" />
     </div>
 
-    <!-- Data Preview -->
+    <!-- Filters and Data Preview -->
     <div v-if="dataStore.hasActiveSource" class="dashboard-section">
+      <FilterPanel />
       <DataPreview />
     </div>
 
@@ -53,6 +54,7 @@ import { useDataStore } from '../stores/dataStore'
 import FileUpload from './FileUpload.vue'
 import DatabaseConnect from './DatabaseConnect.vue'
 import DataPreview from './DataPreview.vue'
+import FilterPanel from './FilterPanel.vue'
 import ChartConfig from './ChartConfig.vue'
 import ChartView from './ChartView.vue'
 
