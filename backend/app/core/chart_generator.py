@@ -18,40 +18,71 @@ class ChartGenerator:
                          title: Optional[str] = None,
                          x_label: Optional[str] = None,
                          y_label: Optional[str] = None,
+                         y_columns: Optional[list[str]] = None,
+                         secondary_y_columns: Optional[list[str]] = None,
                          **options) -> dict:
-        """Create a line chart"""
+        """Create a line chart with optional multi-Y columns and secondary axis"""
         fig = go.Figure()
 
+        # Determine which columns to plot
+        columns_to_plot = y_columns if y_columns else [y]
+        secondary_cols = set(secondary_y_columns or [])
+        has_secondary = len(secondary_cols) > 0
+
         if color and color in data.columns:
-            # Multiple lines grouped by color column
+            # Grouped by color — use first Y column only to avoid trace explosion
+            plot_y = columns_to_plot[0]
             for group_name in data[color].unique():
                 group_data = data[data[color] == group_name]
                 fig.add_trace(go.Scatter(
                     x=group_data[x],
-                    y=group_data[y],
+                    y=group_data[plot_y],
                     mode='lines+markers',
                     name=str(group_name),
                     line=dict(width=2),
                     marker=dict(size=6)
                 ))
         else:
-            # Single line
-            fig.add_trace(go.Scatter(
-                x=data[x],
-                y=data[y],
-                mode='lines+markers',
-                name=y,
-                line=dict(width=2),
-                marker=dict(size=6)
-            ))
+            # Multiple Y columns
+            for col in columns_to_plot:
+                if col not in data.columns:
+                    continue
+                trace_kwargs = dict(
+                    x=data[x],
+                    y=data[col],
+                    mode='lines+markers',
+                    name=col,
+                    line=dict(width=2),
+                    marker=dict(size=6)
+                )
+                if has_secondary and col in secondary_cols:
+                    trace_kwargs['yaxis'] = 'y2'
+                fig.add_trace(go.Scatter(**trace_kwargs))
 
-        fig.update_layout(
-            title=title or f"{y} vs {x}",
+        # Build layout
+        layout = dict(
+            title=title or f"{', '.join(columns_to_plot)} vs {x}",
             xaxis_title=x_label or x,
-            yaxis_title=y_label or y,
             hovermode='closest',
             template='plotly_white'
         )
+
+        if has_secondary:
+            primary_cols = [c for c in columns_to_plot if c not in secondary_cols]
+            layout['yaxis'] = dict(
+                title=y_label or (', '.join(primary_cols) if primary_cols else 'Primary'),
+                side='left'
+            )
+            layout['yaxis2'] = dict(
+                title=', '.join(secondary_cols),
+                side='right',
+                overlaying='y',
+                showgrid=False
+            )
+        else:
+            layout['yaxis_title'] = y_label or (columns_to_plot[0] if len(columns_to_plot) == 1 else "Value")
+
+        fig.update_layout(**layout)
 
         return fig.to_dict()
 
@@ -62,22 +93,43 @@ class ChartGenerator:
                         title: Optional[str] = None,
                         x_label: Optional[str] = None,
                         y_label: Optional[str] = None,
+                        bar_mode: str = 'group',
+                        sort_order: str = '',
                         **options) -> dict:
-        """Create a bar chart"""
+        """Create a bar chart with stacked/grouped mode and sorting"""
         fig = go.Figure()
+
+        # Apply sorting
+        plot_data = data.copy()
+        if sort_order and y and y in plot_data.columns and x in plot_data.columns:
+            if sort_order == 'asc':
+                plot_data = plot_data.sort_values(by=y, ascending=True)
+            elif sort_order == 'desc':
+                plot_data = plot_data.sort_values(by=y, ascending=False)
+            elif sort_order == 'alpha':
+                plot_data = plot_data.sort_values(by=x, ascending=True)
 
         if y is None:
             # Count frequency
-            counts = data[x].value_counts().sort_index()
+            counts = plot_data[x].value_counts()
+            if sort_order == 'asc':
+                counts = counts.sort_values(ascending=True)
+            elif sort_order == 'desc':
+                counts = counts.sort_values(ascending=False)
+            elif sort_order == 'alpha':
+                counts = counts.sort_index(ascending=True)
+            else:
+                counts = counts.sort_index()
+
             if orientation == 'v':
                 fig.add_trace(go.Bar(x=counts.index, y=counts.values))
             else:
                 fig.add_trace(go.Bar(y=counts.index, x=counts.values, orientation='h'))
         else:
             # Use y values
-            if color and color in data.columns:
-                for group_name in data[color].unique():
-                    group_data = data[data[color] == group_name]
+            if color and color in plot_data.columns:
+                for group_name in plot_data[color].unique():
+                    group_data = plot_data[plot_data[color] == group_name]
                     if orientation == 'v':
                         fig.add_trace(go.Bar(
                             x=group_data[x],
@@ -93,16 +145,16 @@ class ChartGenerator:
                         ))
             else:
                 if orientation == 'v':
-                    fig.add_trace(go.Bar(x=data[x], y=data[y]))
+                    fig.add_trace(go.Bar(x=plot_data[x], y=plot_data[y]))
                 else:
-                    fig.add_trace(go.Bar(y=data[x], x=data[y], orientation='h'))
+                    fig.add_trace(go.Bar(y=plot_data[x], x=plot_data[y], orientation='h'))
 
         fig.update_layout(
             title=title or f"Bar Chart",
-            xaxis_title=x_label or x,
-            yaxis_title=y_label or (y if y else "Count"),
+            xaxis_title=x_label or (x if orientation == 'v' else (y if y else "Count")),
+            yaxis_title=y_label or ((y if y else "Count") if orientation == 'v' else x),
             template='plotly_white',
-            barmode='group'
+            barmode=bar_mode
         )
 
         return fig.to_dict()
@@ -114,17 +166,36 @@ class ChartGenerator:
                            title: Optional[str] = None,
                            x_label: Optional[str] = None,
                            y_label: Optional[str] = None,
+                           show_trendline: bool = False,
+                           trendline_degree: int = 1,
+                           color_numeric: Optional[str] = None,
                            **options) -> dict:
-        """Create a scatter plot"""
+        """Create a scatter plot with optional trendline and numeric color"""
         fig = go.Figure()
 
         hover_template = f"<b>{x}</b>: %{{x}}<br><b>{y}</b>: %{{y}}"
         if color:
-            hover_template += f"<br><b>{color}</b>: %{{marker.color}}"
+            hover_template += f"<br><b>{color}</b>: %{{text}}"
         if size:
             hover_template += f"<br><b>{size}</b>: %{{marker.size}}"
 
-        if color and color in data.columns:
+        if color_numeric and color_numeric in data.columns:
+            # Continuous numeric color mapping
+            marker_size = data[size] if (size and size in data.columns) else 8
+            fig.add_trace(go.Scatter(
+                x=data[x],
+                y=data[y],
+                mode='markers',
+                marker=dict(
+                    size=marker_size,
+                    color=data[color_numeric],
+                    colorscale='Viridis',
+                    showscale=True,
+                    colorbar=dict(title=color_numeric)
+                ),
+                hovertemplate=f"<b>{x}</b>: %{{x}}<br><b>{y}</b>: %{{y}}<br><b>{color_numeric}</b>: %{{marker.color}}<extra></extra>"
+            ))
+        elif color and color in data.columns:
             for group_name in data[color].unique():
                 group_data = data[data[color] == group_name]
                 marker_size = group_data[size] if (size and size in data.columns) else 8
@@ -135,7 +206,7 @@ class ChartGenerator:
                     mode='markers',
                     name=str(group_name),
                     marker=dict(size=marker_size),
-                    text=group_name,
+                    text=str(group_name),
                     hovertemplate=hover_template
                 ))
         else:
@@ -148,12 +219,79 @@ class ChartGenerator:
                 hovertemplate=hover_template
             ))
 
+        # Trendline
+        if show_trendline:
+            clean = data[[x, y]].dropna()
+            x_vals = pd.to_numeric(clean[x], errors='coerce')
+            y_vals = pd.to_numeric(clean[y], errors='coerce')
+            mask = x_vals.notna() & y_vals.notna()
+            x_vals = x_vals[mask].values
+            y_vals = y_vals[mask].values
+
+            if len(x_vals) > 1:
+                degree = max(1, min(trendline_degree, 5))
+                coeffs = np.polyfit(x_vals, y_vals, degree)
+                x_sorted = np.sort(x_vals)
+                y_fit = np.polyval(coeffs, x_sorted)
+
+                # Calculate R-squared
+                y_pred = np.polyval(coeffs, x_vals)
+                ss_res = np.sum((y_vals - y_pred) ** 2)
+                ss_tot = np.sum((y_vals - np.mean(y_vals)) ** 2)
+                r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+
+                # Build equation string
+                if degree == 1:
+                    eq_str = f"y = {coeffs[0]:.2f}x + {coeffs[1]:.2f}"
+                else:
+                    terms = []
+                    for i, c in enumerate(coeffs):
+                        power = degree - i
+                        if power == 0:
+                            terms.append(f"{c:.2f}")
+                        elif power == 1:
+                            terms.append(f"{c:.2f}x")
+                        else:
+                            terms.append(f"{c:.2f}x^{power}")
+                    eq_str = " + ".join(terms)
+
+                fig.add_trace(go.Scatter(
+                    x=x_sorted,
+                    y=y_fit,
+                    mode='lines',
+                    name=f'Trendline (R²={r_squared:.4f})',
+                    line=dict(color='red', width=2, dash='dash')
+                ))
+
+                # Add equation annotation below the plot area
+                # fig.add_annotation(
+                #     text=f"{eq_str}  |  R² = {r_squared:.4f}",
+                #     # xref="paper", yref="paper",
+                #     # # x=0.5, y=-0.15,
+                #     # xanchor="center", yanchor="bottom",
+                #     showarrow=False,
+                #     bordercolor="black",
+                #     borderwidth=1,
+                #     borderpad=4,
+                #     bgcolor="rgba(255, 255, 255, 0.85)",
+                #     font=dict(family="monospace", size=11),
+                #     align="center"
+                # )
+
         fig.update_layout(
             title=title or f"{y} vs {x}",
             xaxis_title=x_label or x,
             yaxis_title=y_label or y,
             hovermode='closest',
-            template='plotly_white'
+            template='plotly_white',
+            margin=dict(b=80) if show_trendline else None,
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='center',
+                x=0.5
+            ) if (color or color_numeric) else None
         )
 
         return fig.to_dict()
@@ -164,9 +302,13 @@ class ChartGenerator:
                         color: Optional[str] = None,
                         title: Optional[str] = None,
                         x_label: Optional[str] = None,
+                        show_distribution_fit: bool = False,
+                        show_statistics: bool = False,
                         **options) -> dict:
-        """Create a histogram"""
+        """Create a histogram with optional distribution fit and statistics"""
         fig = go.Figure()
+
+        col_data = data[column].dropna()
 
         if color and color in data.columns:
             for group_name in data[color].unique():
@@ -180,14 +322,76 @@ class ChartGenerator:
             fig.update_layout(barmode='overlay')
         else:
             fig.add_trace(go.Histogram(
-                x=data[column],
-                nbinsx=bins
+                x=col_data,
+                nbinsx=bins,
+                name=column,
+                histnorm='probability density' if show_distribution_fit else None
             ))
+
+        # Distribution fit overlay
+        if show_distribution_fit and len(col_data) > 1:
+            from scipy import stats as scipy_stats
+
+            mu, sigma = scipy_stats.norm.fit(col_data)
+            x_range = np.linspace(float(col_data.min()), float(col_data.max()), 200)
+            pdf_values = scipy_stats.norm.pdf(x_range, mu, sigma)
+
+            fig.add_trace(go.Scatter(
+                x=x_range,
+                y=pdf_values,
+                mode='lines',
+                name=f'Normal Fit (\u03bc={mu:.2f}, \u03c3={sigma:.2f})',
+                line=dict(color='red', width=2.5)
+            ))
+
+        # Statistics annotation
+        if show_statistics and len(col_data) > 0:
+            from scipy import stats as scipy_stats
+
+            n = len(col_data)
+            mean_val = float(col_data.mean())
+            std_val = float(col_data.std())
+            median_val = float(col_data.median())
+            skewness = float(col_data.skew())
+            kurtosis = float(col_data.kurtosis())
+
+            # Shapiro-Wilk test (limit sample size for performance)
+            sample = col_data if n <= 5000 else col_data.sample(5000, random_state=42)
+            try:
+                _, shapiro_p = scipy_stats.shapiro(sample)
+            except Exception:
+                shapiro_p = None
+
+            stats_lines = [
+                f"<b>Statistics</b>",
+                f"n = {n:,}",
+                f"Mean = {mean_val:.4f}",
+                f"Std = {std_val:.4f}",
+                f"Median = {median_val:.4f}",
+                f"Skewness = {skewness:.4f}",
+                f"Kurtosis = {kurtosis:.4f}",
+            ]
+            if shapiro_p is not None:
+                stats_lines.append(f"Shapiro-Wilk p = {shapiro_p:.4e}")
+
+            fig.add_annotation(
+                text="<br>".join(stats_lines),
+                xref="paper", yref="paper",
+                x=0.98, y=0.98,
+                xanchor="right", yanchor="top",
+                showarrow=False,
+                bordercolor="black",
+                borderwidth=1,
+                borderpad=6,
+                bgcolor="rgba(255, 255, 255, 0.85)",
+                font=dict(family="monospace", size=11),
+                align="left"
+            )
 
         fig.update_layout(
             title=title or f"Distribution of {column}",
             xaxis_title=x_label or column,
-            yaxis_title="Frequency",
+            yaxis_title="Probability Density" if show_distribution_fit else "Frequency",
             template='plotly_white'
         )
 
@@ -198,33 +402,65 @@ class ChartGenerator:
                        y: str = None,
                        color: Optional[str] = None,
                        title: Optional[str] = None,
+                       show_points: bool = False,
+                       horizontal: bool = False,
                        **options) -> dict:
-        """Create a box plot"""
+        """Create a box plot with optional data points and horizontal orientation"""
         fig = go.Figure()
 
+        box_kwargs = {}
+        if show_points:
+            box_kwargs['boxpoints'] = 'all'
+            box_kwargs['jitter'] = 0.3
+            box_kwargs['pointpos'] = -1.5
+
         if x and x in data.columns:
-            # Box plot grouped by x
             for group_name in sorted(data[x].unique()):
                 group_data = data[data[x] == group_name]
-                fig.add_trace(go.Box(
-                    y=group_data[y],
-                    name=str(group_name),
-                    boxmean='sd'
-                ))
+                if horizontal:
+                    fig.add_trace(go.Box(
+                        x=group_data[y],
+                        name=str(group_name),
+                        boxmean='sd',
+                        **box_kwargs
+                    ))
+                else:
+                    fig.add_trace(go.Box(
+                        y=group_data[y],
+                        name=str(group_name),
+                        boxmean='sd',
+                        **box_kwargs
+                    ))
         else:
-            # Single box plot
-            fig.add_trace(go.Box(
-                y=data[y],
-                name=y,
-                boxmean='sd'
-            ))
+            if horizontal:
+                fig.add_trace(go.Box(
+                    x=data[y],
+                    name=y,
+                    boxmean='sd',
+                    **box_kwargs
+                ))
+            else:
+                fig.add_trace(go.Box(
+                    y=data[y],
+                    name=y,
+                    boxmean='sd',
+                    **box_kwargs
+                ))
 
-        fig.update_layout(
-            title=title or f"Box Plot of {y}",
-            yaxis_title=y,
-            xaxis_title=x if x else "",
-            template='plotly_white'
-        )
+        if horizontal:
+            fig.update_layout(
+                title=title or f"Box Plot of {y}",
+                xaxis_title=y,
+                yaxis_title=x if x else "",
+                template='plotly_white'
+            )
+        else:
+            fig.update_layout(
+                title=title or f"Box Plot of {y}",
+                yaxis_title=y,
+                xaxis_title=x if x else "",
+                template='plotly_white'
+            )
 
         return fig.to_dict()
 
@@ -233,41 +469,81 @@ class ChartGenerator:
                           y: str = None,
                           color: Optional[str] = None,
                           title: Optional[str] = None,
+                          show_points: bool = False,
+                          horizontal: bool = False,
                           **options) -> dict:
-        """Create a violin plot"""
+        """Create a violin plot with optional data points and horizontal orientation"""
         fig = go.Figure()
+
+        violin_kwargs = {}
+        if show_points:
+            violin_kwargs['points'] = 'all'
+            violin_kwargs['jitter'] = 0.3
+            violin_kwargs['pointpos'] = -1.5
 
         if x and x in data.columns:
             for group_name in sorted(data[x].unique()):
                 group_data = data[data[x] == group_name]
-                fig.add_trace(go.Violin(
-                    y=group_data[y],
-                    name=str(group_name),
-                    box_visible=True,
-                    meanline_visible=True
-                ))
+                if horizontal:
+                    fig.add_trace(go.Violin(
+                        x=group_data[y],
+                        name=str(group_name),
+                        box_visible=True,
+                        meanline_visible=True,
+                        orientation='h',
+                        **violin_kwargs
+                    ))
+                else:
+                    fig.add_trace(go.Violin(
+                        y=group_data[y],
+                        name=str(group_name),
+                        box_visible=True,
+                        meanline_visible=True,
+                        **violin_kwargs
+                    ))
         else:
-            fig.add_trace(go.Violin(
-                y=data[y],
-                name=y,
-                box_visible=True,
-                meanline_visible=True
-            ))
+            if horizontal:
+                fig.add_trace(go.Violin(
+                    x=data[y],
+                    name=y,
+                    box_visible=True,
+                    meanline_visible=True,
+                    orientation='h',
+                    **violin_kwargs
+                ))
+            else:
+                fig.add_trace(go.Violin(
+                    y=data[y],
+                    name=y,
+                    box_visible=True,
+                    meanline_visible=True,
+                    **violin_kwargs
+                ))
 
-        fig.update_layout(
-            title=title or f"Violin Plot of {y}",
-            yaxis_title=y,
-            xaxis_title=x if x else "",
-            template='plotly_white'
-        )
+        if horizontal:
+            fig.update_layout(
+                title=title or f"Violin Plot of {y}",
+                xaxis_title=y,
+                yaxis_title=x if x else "",
+                template='plotly_white'
+            )
+        else:
+            fig.update_layout(
+                title=title or f"Violin Plot of {y}",
+                yaxis_title=y,
+                xaxis_title=x if x else "",
+                template='plotly_white'
+            )
 
         return fig.to_dict()
 
     @staticmethod
     def create_heatmap(data: pd.DataFrame,
                       title: Optional[str] = None,
+                      colorscale: str = 'RdBu',
+                      show_annotations: bool = True,
                       **options) -> dict:
-        """Create a correlation heatmap"""
+        """Create a correlation heatmap with configurable colorscale and annotations"""
         # Assume data is a correlation matrix or compute it
         if data.shape[0] != data.shape[1]:
             # Not a correlation matrix, compute it
@@ -276,17 +552,21 @@ class ChartGenerator:
         else:
             corr_matrix = data
 
-        fig = go.Figure(data=go.Heatmap(
+        heatmap_kwargs = dict(
             z=corr_matrix.values,
             x=corr_matrix.columns,
             y=corr_matrix.columns,
-            colorscale='RdBu',
+            colorscale=colorscale,
             zmid=0,
-            text=corr_matrix.values,
-            texttemplate='%{text:.2f}',
-            textfont={"size": 10},
             colorbar=dict(title="Correlation")
-        ))
+        )
+
+        if show_annotations:
+            heatmap_kwargs['text'] = corr_matrix.values
+            heatmap_kwargs['texttemplate'] = '%{text:.2f}'
+            heatmap_kwargs['textfont'] = {"size": 10}
+
+        fig = go.Figure(data=go.Heatmap(**heatmap_kwargs))
 
         fig.update_layout(
             title=title or "Correlation Heatmap",

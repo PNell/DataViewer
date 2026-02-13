@@ -8,6 +8,7 @@ python-dotenv>=1.0.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
 aiofiles>=23.2.1
+scipy>=1.11.0
 
 # SQL Server support (optional - see installation notes below)
 # If pyodbc fails to install, you can skip it and still use CSV functionality
